@@ -14,17 +14,18 @@ import uvicorn
 from spellbook import _utils, components, const, thoughtspot
 from spellbook.components import AuthenticationForm, thoughtspot_sdk
 from spellbook.components.utils import add_sse, update_classes
+from spellbook.spellbook import Spellbook
 
 log = logging.getLogger(__name__)
 
 MageAsHelper = update_classes(
-    add_sse(components.Mage, connect="/process-event", target="mage", close="close", hx_swap="outerHTML"),
+    components.Mage,
     "w-12", "opacity-70", "absolute", "-bottom-5", "-right-5",
     method="ADD",
 )
 
 
-async def is_user_authenticated(request: Request, session):
+async def is_user_authenticated(request: Request, session) -> fh.RedirectResponse | None:
     """See if the User is authenticated."""
     is_authenticated = any(
         [
@@ -35,20 +36,25 @@ async def is_user_authenticated(request: Request, session):
     )
 
     if "DEV" in os.environ and not is_authenticated:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
         api = thoughtspot.ThoughtSpotAPIClient(
-            base_url="...",
-            username="...",
-            secret_key="...",
+            base_url=os.environ["SITE"], username=os.environ["USER"], secret_key=os.environ["PASS"]
         )
 
         await api.login()
 
         request.state.lifetime.api_session = api
         request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
+        request.state.lifetime.current_page = "/"
         return fh.RedirectResponse("/", status_code=303)
 
     if not is_authenticated:
         return fh.RedirectResponse("/login", status_code=303)
+    
+    return
 
 
 @contextlib.asynccontextmanager
@@ -56,6 +62,7 @@ async def lifespan(app: fh.FastHTML) -> AsyncIterator[TypedDict]:
     # STARTUP
     lifetime = _utils.State()
     lifetime.message_queue = asyncio.Queue()
+    lifetime.spellbook = Spellbook()
 
     yield {"lifetime": lifetime}
 
@@ -104,7 +111,8 @@ async def _(request: Request):
     page = fh.Body(
         fh.Div(
             full,
-            MageAsHelper,
+            add_sse(fh.Span("", style="display: none;"), connect="/process-event", target="mage", close="close", hx_swap="outerHTML"),
+            MageAsHelper(hx_swap_oob="true"),
             id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative",
         ),
     )
@@ -112,34 +120,23 @@ async def _(request: Request):
     return fh.Title("Spellbook"), init, page
 
 
-class Spellbook:
-
-    def __init__(self):
-        self.spells: list[Spell] = []
-
-    async def lookup_spells(self, request: Request) -> list[Spell]:
-        """ """
-        spells = []
-        data = await request.json()
-        return spells
-
-
-class Spell:
-
-    def __init__(self):
-        ...
-
-
 @app.post("/mirror-embed-event")
 async def _(request: Request) -> None:
     """ """
+    data = await request.json()
+
+    if data.get("type", None) == "ROUTE_CHANGE":
+        request.state.lifetime.current_page = data["data"]["currentPath"]
+        log.info(f"Route Changed: {request.state.lifetime.current_page}")
+
     spells = await request.state.lifetime.spellbook.lookup_spells(request)
-    component = update_classes(MageAsHelper, "mage-glow", method="ADD" if spells else "REMOVE")
+    log.info(f"Spells: {spells}")
+
+    # Send an update to the frontend to glow the Mage.
+    component = update_classes(MageAsHelper(hx_swap_oob="true"), "mage-glow", method="ADD" if spells else "REMOVE")
     await request.state.lifetime.message_queue.put(("mage", fh.to_xml(component)))
 
-    # if data["type"] == "ROUTE_CHANGE" and data["data"]["currentPath"] == "/insights/home/monitor-alerts":
-    #     log.warning("Monitor Tab visited, CANCELLING ALL SSE LISTENERS !!!")
-    #     await request.state.lifetime.message_queue.put(("close", ""))
+    return fh.Response(None)
 
 
 @app.get("/process-event")
@@ -149,11 +146,14 @@ async def send_sse_message(request: Request):
         try:
             while True:
                 event, data = await request.state.lifetime.message_queue.get()
+                # log.info(f"Sending event '{event}'\n{data}\n\n")
                 yield f"event: {event}\ndata: {data}\n\n"
         
-        finally:
+        except Exception as e:
+            # log.info("Sending event 'close'\n\n")
             yield "event: close\ndata: \n\n"
 
+    log.info(f"Connecting SSE: {request}")
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
@@ -169,8 +169,10 @@ async def _(request: Request, session):
 
     if r.is_success:
         session["auth"] = True
+        request.state.lifetime.spellbook = Spellbook()
         request.state.lifetime.api_session = api
         request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
+        request.state.lifetime.current_page = "/"
         return fh.Response(None, headers={"hx-redirect": "/"})
     else:
         log.error(r.content)
@@ -201,4 +203,4 @@ if __name__ == "__main__":
 
     os.environ["DEV"] = "true"
 
-    uvicorn.run("spellbook.main:app", port=5002, reload=True, log_config=_logging.CONFIG)
+    uvicorn.run("spellbook.__main__:app", port=5002, reload=True, log_config=_logging.CONFIG)

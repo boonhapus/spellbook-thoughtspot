@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "httpx",
     "python-fasthtml",
+    "python-dotenv",
     "pydantic",
     "rich",
 ]

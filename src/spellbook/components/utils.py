@@ -34,7 +34,8 @@ def update_classes(tag: FT, *classes: str, method: Literal["ADD", "TOGGLE", "REM
 def add_sse(tag: FT, *, connect: str, target: str, close: str | None = None, hx_swap: str | None = None, **kwargs) -> FT:
     """Inject SSE information into an element."""
     # Don't modify the tag in-place, in case it's being reused.
-    new = _copy_ft(tag)
+    # new = _copy_ft(tag)
+    new = tag
 
     new.attrs["hx-ext"] = "sse"
     new.attrs["sse-connect"] = connect
