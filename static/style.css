@@ -1,0 +1,64 @@
+/*
+ * THEME OVERRIDES USING CSS VARIABLES MUST BE IN OKLCH
+ *
+ * LINKS:
+ * - https://www.realtimecolors.com/?colors=1f0231-f4e7fd-970bf4-23cd6a-f4a462&fonts=Inter-Inter
+ * - https://oklch.com/
+ * - https://daisyui.com/docs/colors/
+ */
+[data-theme="spellbook"] {
+    --p:  54.98% 0.284 303.28;  /* #970bf4 :: PRIMARY */  
+    --s:  74.57% 0.191 151.2 ;  /* #23cd6a :: SECONDARY */
+    --a:  78.43% 0.126  59   ;  /* #f4a462 :: ACCENT */
+    --n : 18.92% 0.09  308.6 ;  /* #1f0231 :: NEUTRAL */
+    --b1: 94.47% 0.032 311.75;  /* #f4e7fd :: BASE 100 */
+    --in: 81.91% 0.14  208.8 ;  /* #0bdcf4 :: INFO */
+    --su:            var(--s);  /*         :: SUCCESS */
+    --wa:            var(--a);  /*         :: WARNING */
+    --er: 61.47% 0.226  23.67;  /* #ee2b3b :: ERROR */
+
+    /* OPTIONAL: Will be a readable tone of primary if not specified */
+    /* --pc: ;  PRIMARY CONTENT */
+    /* --sc: ;  SECONDARY CONTENT */
+    /* --ac: ;  ACCENT CONTENT */
+    /* --nc: ;  NEUTRAL CONTENT */
+
+    /* OPTIONAL: Will be a readable tone of base-x00 if not specified */
+    /* --b2: ;  BASE 200 */
+    /* --b3: ;  BASE 300 */
+    /* --bc: ;  BASE CONTENT */
+
+    /* --inc: ; INFO CONTENT */
+    /* --suc: ; SUCCESS CONTENT */
+    /* --wac: ; WARNING CONTENT */
+    /* --erc: ; ERROR CONTENT */
+}
+
+
+@keyframes pulse-glow {
+    0% { filter: drop-shadow(0 0 12px oklch(var(--a))) drop-shadow(0 0 14px oklch(var(--a))); }
+    50% { filter: drop-shadow(0 0 16px oklch(var(--a))) drop-shadow(0 0 20px oklch(var(--a))); }
+    100% { filter: drop-shadow(0 0 12px oklch(var(--a))) drop-shadow(0 0 14px oklch(var(--a))); }
+}
+
+.mage-glow {
+    animation: pulse-glow 2s infinite;
+}
+
+
+/* A LITTLE BIT OF FORM VALIDATION UX */
+
+.input-bordered:has(input:not(:placeholder-shown):valid) {
+    border-color: oklch(var(--su) / .5);
+    border-width: 2px;
+}
+
+.input-bordered:has(input:not(:placeholder-shown):invalid) {
+    border-color: oklch(var(--er) / .5);
+    border-width: 2px;
+}
+
+.input-bordered:has(input:focus:invalid) {
+    border-color: oklch(var(--wa) / .5);
+    border-width: 2px;
+}
