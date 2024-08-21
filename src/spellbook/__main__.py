@@ -106,6 +106,7 @@ async def _(request: Request):
     page = fh.Body(
         fh.Div(
             full,
+            fh.Button(MageAsHelper, hx_on__click="alert('mage-glow!');"),
             id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
         ),
     )
@@ -121,6 +122,7 @@ async def _(request: Request) -> None:
     if data.get("type", None) == "ROUTE_CHANGE":
         request.state.lifetime.current_page = data["data"]["currentPath"]
         log.info(f"Route Changed: {request.state.lifetime.current_page}")
+        return fh.Response(None, status_code=200, headers={"hx-trigger": "toggle-mage"})
 
     spells = await request.state.lifetime.spellbook.lookup_spells(request)
     log.info(f"Spells: {spells}")
