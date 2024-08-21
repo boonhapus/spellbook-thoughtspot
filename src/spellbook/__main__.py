@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import AsyncIterator, TypedDict
+from typing import AsyncIterator, Callable, TypedDict
 import asyncio
 import contextlib
 import logging
@@ -9,6 +9,7 @@ import os
 from fasthtml import common as fh
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
+import httpx
 import uvicorn
 
 from spellbook import _utils, components, const, thoughtspot
@@ -24,37 +25,37 @@ MageAsHelper = update_classes(
     method="ADD",
 )
 
+def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | None]:
+    """Check if the user is authorized to access the page."""
+    async def wrapper(request: Request, *args, **kwargs):
+        if "DEV" in os.environ:
+            from dotenv import load_dotenv
 
-async def is_user_authenticated(request: Request, session) -> fh.RedirectResponse | None:
-    """See if the User is authenticated."""
-    is_authenticated = any(
-        [
-            getattr(request.state.lifetime, "api_session", None),
-            session.get("auth", None) is not None,
-            request.scope.get("auth", None) is not None,
-        ],
-    )
+            load_dotenv()
+            await do_authorization(request, url=os.environ["HOST"], user=os.environ["USER"], secret=os.environ["PASS"])
+            is_user_authorized = True
 
-    if "DEV" in os.environ and not is_authenticated:
-        from dotenv import load_dotenv
+        else:
+            is_user_authorized = getattr(request.state.lifetime, "api_session", False)
 
-        load_dotenv()
+        if not is_user_authorized:
+            return fh.RedirectResponse("/login", status_code=303)
 
-        api = thoughtspot.ThoughtSpotAPIClient(
-            base_url=os.environ["SITE"], username=os.environ["USER"], secret_key=os.environ["PASS"]
-        )
+        log.info(f"{request=}, {args=}, {kwargs=}")
+        # return await fn(request, *args, **kwargs)
+        return await fn(request)
+    return wrapper
 
-        await api.login()
 
-        request.state.lifetime.api_session = api
-        request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
-        request.state.lifetime.current_page = "/"
-        return fh.RedirectResponse("/", status_code=303)
+async def do_authorization(request, url: str, user: str, secret: str):
+    """Perform the authorization check."""
+    api = thoughtspot.ThoughtSpotAPIClient(base_url=url, username=user, secret_key=secret)
+    r = await api.login()
+    r.raise_for_status()
 
-    if not is_authenticated:
-        return fh.RedirectResponse("/login", status_code=303)
-    
-    return
+    request.state.lifetime.api_session = api
+    request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
+    request.state.lifetime.current_page = "/"
 
 
 @contextlib.asynccontextmanager
@@ -81,13 +82,6 @@ app = fh.FastHTML(
         fh.Link(href="/static/style.css", rel="stylesheet", type="text/css"),
     ),
     lifespan=lifespan,
-    before=fh.Beforeware(
-        is_user_authenticated,
-        skip=[
-            r"/static/.*", "/favicon.ico",
-            "/login", "/auth", "/mirror-embed-event", "/process-event",
-        ],
-    ),
 )
 
 
@@ -104,6 +98,7 @@ async def static_files(filename: str, ext: str) -> fh.FileResponse:
 
 
 @app.get("/")
+@check_authorization
 async def _(request: Request):
     init = thoughtspot_sdk.Init(thoughtspot_host=str(request.state.lifetime.api_session.base_url))
     full = thoughtspot_sdk.FullAppEmbed(div_id="embed-container")
@@ -111,9 +106,7 @@ async def _(request: Request):
     page = fh.Body(
         fh.Div(
             full,
-            add_sse(fh.Span("", style="display: none;"), connect="/process-event", target="mage", close="close", hx_swap="outerHTML"),
-            MageAsHelper(hx_swap_oob="true"),
-            id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative",
+            id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
         ),
     )
 
@@ -133,56 +126,34 @@ async def _(request: Request) -> None:
     log.info(f"Spells: {spells}")
 
     # Send an update to the frontend to glow the Mage.
-    component = update_classes(MageAsHelper(hx_swap_oob="true"), "mage-glow", method="ADD" if spells else "REMOVE")
-    await request.state.lifetime.message_queue.put(("mage", fh.to_xml(component)))
+    # component = update_classes(MageAsHelper(hx_swap_oob="true"), "mage-glow", method="ADD" if spells else "REMOVE")
+    # await request.state.lifetime.message_queue.put(("mage", fh.to_xml(component)))
 
     return fh.Response(None)
 
 
-@app.get("/process-event")
-async def send_sse_message(request: Request):
-    """Hook up ThoughtSpot events to HTMX."""
-    async def generate():
-        try:
-            while True:
-                event, data = await request.state.lifetime.message_queue.get()
-                # log.info(f"Sending event '{event}'\n{data}\n\n")
-                yield f"event: {event}\ndata: {data}\n\n"
+# @app.get("/process-event")
+# async def send_sse_message(request: Request):
+#     """Hook up ThoughtSpot events to HTMX."""
+#     async def generate():
+#         try:
+#             while True:
+#                 event, data = await request.state.lifetime.message_queue.get()
+#                 # log.info(f"Sending event '{event}'\n{data}\n\n")
+#                 yield f"event: {event}\ndata: {data}\n\n"
         
-        except Exception as e:
-            # log.info("Sending event 'close'\n\n")
-            yield "event: close\ndata: \n\n"
+#         except Exception as e:
+#             # log.info("Sending event 'close'\n\n")
+#             yield "event: close\ndata: \n\n"
 
-    log.info(f"Connecting SSE: {request}")
-    return StreamingResponse(generate(), media_type="text/event-stream")
-
-
-@app.post("/auth")
-async def _(request: Request, session):
-    """Authenticate the User to ThoughtSpot and initialize the SDK."""
-    data = await request.form()
-
-    # ATTEMPT AUTHENTICATION
-    api = thoughtspot.ThoughtSpotAPIClient(base_url=data["site"], username=data["user"], secret_key=data["pass"])
-
-    r = await api.login()
-
-    if r.is_success:
-        session["auth"] = True
-        request.state.lifetime.spellbook = Spellbook()
-        request.state.lifetime.api_session = api
-        request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
-        request.state.lifetime.current_page = "/"
-        return fh.Response(None, headers={"hx-redirect": "/"})
-    else:
-        log.error(r.content)
-        return AuthenticationForm
+#     log.info(f"Connecting SSE: {request}")
+#     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/login")
-async def _(session):
-    """ """
-    if session.get("auth", None) is not None:
+async def _(request: Request):
+    """Login page."""
+    if getattr(request.state.lifetime, "api_session", False):
         return fh.RedirectResponse("/", status_code=303)
 
     page = fh.Body(
@@ -196,6 +167,22 @@ async def _(session):
     )
     
     return fh.Title("Spellbook"), page
+
+
+@app.post("/auth")
+async def _(request: Request):
+    """Authenticate the User to ThoughtSpot."""
+    data = await request.form()
+
+    try:
+        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])
+    
+    except httpx.HTTPStatusError as e:
+        log.error(f"Auth failed: {e}")
+        return AuthenticationForm
+
+    else:
+        return fh.Response(None, headers={"hx-redirect": "/"})
 
 
 if __name__ == "__main__":

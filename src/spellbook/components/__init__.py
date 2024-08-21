@@ -87,7 +87,7 @@ AuthenticationForm = fh.Form(
     fh.Label(
         fh.Img(src="/static/icons/link.svg", cls="w-6"),
         fh.Input(
-            name="site", type="url", required=True,
+            name="host", type="url", required=True,
             placeholder="https://customer.thoughtspot.cloud",
             cls="grow",
         ),
