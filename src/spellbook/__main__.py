@@ -6,23 +6,31 @@ import contextlib
 import logging
 import os
 
-from fasthtml import common as fh
+from fasthtml import common as fh  # type: ignore
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
 import httpx
 import uvicorn
 
 from spellbook import _utils, components, const, thoughtspot
 from spellbook.components import AuthenticationForm, thoughtspot_sdk
-from spellbook.components.utils import add_sse, update_classes
+from spellbook.components.utils import update_classes
 from spellbook.spellbook import Spellbook
 
 log = logging.getLogger(__name__)
 
+
+class AppLifespanState(TypedDict):
+    """Global namespace for the app."""
+    lifetime: _utils.State
+
+
 MageAsHelper = update_classes(
-    components.Mage(
-        hx_trigger="has-available-spell from:body",
-        hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
+    fh.Div(
+        components.Mage(
+            hx_trigger="has-available-spell from:body",
+            hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
+        ),
+        hx_trigger="click", hx_get="/read-spells", hx_target="#active_spellbook", hx_swap="outerHTML",
     ),
     "w-12", "opacity-70", "absolute", "-bottom-5", "-right-5",
     method="ADD",
@@ -51,7 +59,7 @@ def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | None]:
     return wrapper
 
 
-async def do_authorization(request, url: str, user: str, secret: str):
+async def do_authorization(request: Request, url: str, user: str, secret: str) -> None:
     """Perform the authorization check."""
     api = thoughtspot.ThoughtSpotAPIClient(base_url=url, username=user, secret_key=secret)
     r = await api.login()
@@ -63,17 +71,14 @@ async def do_authorization(request, url: str, user: str, secret: str):
 
 
 @contextlib.asynccontextmanager
-async def lifespan(app: fh.FastHTML) -> AsyncIterator[TypedDict]:
+async def lifespan(app: fh.FastHTML) -> AsyncIterator[AppLifespanState]:
     # STARTUP
     lifetime = _utils.State()
-    lifetime.message_queue = asyncio.Queue()
     lifetime.spellbook = Spellbook()
 
     yield {"lifetime": lifetime}
 
     # TEARDOWN
-    if "DEV" in os.environ:
-        await lifetime.message_queue.put(("close", ""))
 
 
 app = fh.FastHTML(
@@ -104,7 +109,9 @@ async def static_files(filename: str, ext: str) -> fh.FileResponse:
 @app.get("/")
 @check_authorization
 async def _(request: Request):
-    init = thoughtspot_sdk.Init(thoughtspot_host=str(request.state.lifetime.api_session.base_url))
+    """Homepage."""
+    host = str(request.state.lifetime.api_session.base_url)
+    init = thoughtspot_sdk.Init(thoughtspot_host=host, authentication="passthru")
     full = thoughtspot_sdk.FullAppEmbed(div_id="embed-container")
 
     page = fh.Body(
@@ -113,6 +120,7 @@ async def _(request: Request):
             MageAsHelper,
             id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
         ),
+        fh.Dialog(id="active_spellbook", cls="modal"),
     )
 
     return fh.Title("Spellbook"), init, page
@@ -120,36 +128,35 @@ async def _(request: Request):
 
 @app.post("/is-spellbook-enabled-for")
 async def _(request: Request) -> None:
-    """ """
+    """Check whether or not any Spells are available."""
+    lifetime = request.state.lifetime
     data = await request.json()
 
     if data.get("type", None) == "ROUTE_CHANGE":
-        request.state.lifetime.current_page = data["data"]["currentPath"]
-        log.info(f"Route Changed: {request.state.lifetime.current_page}")
-        spells = True
+        lifetime.current_page = data["data"]["currentPath"]
+        log.info(f"Route Changed: {lifetime.current_page}")
 
-    spells = await request.state.lifetime.spellbook.lookup_spells(request)
+    lifetime.active_spells = spells = await request.state.lifetime.spellbook.lookup_spells(request)
     log.info(f"Spells: {spells}")
 
     return fh.Response(None, status_code=200, headers={"hx-trigger": "has-available-spell"} if spells else None)
 
 
-# @app.get("/process-event")
-# async def send_sse_message(request: Request):
-#     """Hook up ThoughtSpot events to HTMX."""
-#     async def generate():
-#         try:
-#             while True:
-#                 event, data = await request.state.lifetime.message_queue.get()
-#                 # log.info(f"Sending event '{event}'\n{data}\n\n")
-#                 yield f"event: {event}\ndata: {data}\n\n"
-        
-#         except Exception as e:
-#             # log.info("Sending event 'close'\n\n")
-#             yield "event: close\ndata: \n\n"
+@app.get("/read-spells")
+async def _(request: Request):
+    """Check whether or not any Spells are available."""
+    modal = fh.Dialog(
+        fh.Div(
+            fh.H3("Hello!", cls="text-lg font-bold"),
+            fh.P("Press ESC key or click outside to close", cls="py-4"),
+            cls="modal-box"
+        ),
+        fh.Form(fh.Button("close"), method="dialog", cls="modal-backdrop"),
+        fh.Script("document.getElementById('active_spellbook').showModal();"),
+        id="active_spellbook", cls="modal",
+    )
 
-#     log.info(f"Connecting SSE: {request}")
-#     return StreamingResponse(generate(), media_type="text/event-stream")
+    return modal
 
 
 @app.get("/login")
@@ -177,7 +184,7 @@ async def _(request: Request):
     data = await request.form()
 
     try:
-        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])
+        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])  # type: ignore[arg-type]
     
     except httpx.HTTPStatusError as e:
         log.error(f"Auth failed: {e}")

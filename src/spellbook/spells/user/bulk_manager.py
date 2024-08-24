@@ -7,7 +7,7 @@ from spellbook.spells.base import Spell
 
 class UserManager(Spell):
     """ """
-    ui_key: str = "/admin:ROUTE_CHANGE"
+    ui_key: str = "/admin:*"
 
     async def invoke(self) -> None:
         ...

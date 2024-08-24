@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 import json
 
 from fasthtml import common as fh
@@ -10,15 +10,17 @@ import pydantic
 class Init(pydantic.BaseModel):
     """ """
     thoughtspot_host: str
-    # auth_type: ...
+    authentication: Literal["passthru"]
 
     def __ft__(self) -> Any:
+        auth_types = {
+            "passthru": "None",
+        }
         return fh.Script(
             f"""
             window.tsembed.init({{
                 thoughtSpotHost: "{self.thoughtspot_host}",
-                authType: window.tsembed.AuthType.None,
-
+                authType: window.tsembed.AuthType.{auth_types[self.authentication]},
             }});
             """
         )
@@ -33,7 +35,7 @@ class FullAppEmbed(pydantic.BaseModel):
         return fh.Script(
             f"""
             async function replicate_event_to_spellbook(payload) {{
-                //
+                // Check if a spell is available.
                 r = await fetch("/is-spellbook-enabled-for", {{
                     headers: {{"content-type": "application/json"}},
                     method: "POST",

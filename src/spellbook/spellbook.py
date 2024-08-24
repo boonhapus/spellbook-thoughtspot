@@ -18,7 +18,7 @@ class Spellbook:
         ]
 
     async def lookup_spells(self, request: Request) -> list[spells.base.Spell]:
-        """ """
+        """Retrieve the available spells."""
         spells: list[spells.base.Spell] = []
 
         data = await request.json()
