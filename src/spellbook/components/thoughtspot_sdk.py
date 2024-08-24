@@ -32,13 +32,23 @@ class FullAppEmbed(pydantic.BaseModel):
     def __ft__(self) -> Any:
         return fh.Script(
             f"""
-            async function mirror_event(payload) {{
-                await fetch('/mirror-embed-event', {{
-                    headers: {{'content-type': 'application/json'}},
-                    method: 'POST',
+            async function replicate_event_to_spellbook(payload) {{
+                //
+                r = await fetch("/is-spellbook-enabled-for", {{
+                    headers: {{"content-type": "application/json"}},
+                    method: "POST",
                     body: JSON.stringify(payload),
                 }});
-            }}
+
+                // We need to process the Response headers from
+                // spellbook/is-spellbook-enabled-for so that we can trigger
+                // the HX attributes.
+                for (const [header, data] of r.headers.entries()) {{
+                    if (header.toLowerCase() == 'hx-trigger') {{
+                        htmx.trigger("body", data)
+                    }}
+                }}
+           }}
 
             const app = new window.tsembed.AppEmbed(document.getElementById('{self.div_id}'), {{
                 showPrimaryNavbar: {json.dumps(self.show_primary_navbar)},
@@ -46,10 +56,10 @@ class FullAppEmbed(pydantic.BaseModel):
             }});
 
             app
-            .on(window.tsembed.EmbedEvent.RouteChange, mirror_event)
-            .on(window.tsembed.EmbedEvent.DialogOpen, mirror_event)
-            .on(window.tsembed.EmbedEvent.DialogClose, mirror_event)
-            .on(window.tsembed.EmbedEvent.Error, mirror_event)
+            .on(window.tsembed.EmbedEvent.RouteChange, replicate_event_to_spellbook)
+            .on(window.tsembed.EmbedEvent.DialogOpen, replicate_event_to_spellbook)
+            .on(window.tsembed.EmbedEvent.DialogClose, replicate_event_to_spellbook)
+            .on(window.tsembed.EmbedEvent.Error, replicate_event_to_spellbook)
             .render();
             """
         )

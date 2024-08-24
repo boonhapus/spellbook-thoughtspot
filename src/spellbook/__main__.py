@@ -20,10 +20,14 @@ from spellbook.spellbook import Spellbook
 log = logging.getLogger(__name__)
 
 MageAsHelper = update_classes(
-    components.Mage,
+    components.Mage(
+        hx_trigger="has-available-spell from:body",
+        hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
+    ),
     "w-12", "opacity-70", "absolute", "-bottom-5", "-right-5",
     method="ADD",
 )
+
 
 def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | None]:
     """Check if the user is authorized to access the page."""
@@ -106,7 +110,7 @@ async def _(request: Request):
     page = fh.Body(
         fh.Div(
             full,
-            fh.Button(MageAsHelper, hx_on__click="alert('mage-glow!');"),
+            MageAsHelper,
             id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
         ),
     )
@@ -114,7 +118,7 @@ async def _(request: Request):
     return fh.Title("Spellbook"), init, page
 
 
-@app.post("/mirror-embed-event")
+@app.post("/is-spellbook-enabled-for")
 async def _(request: Request) -> None:
     """ """
     data = await request.json()
@@ -122,16 +126,12 @@ async def _(request: Request) -> None:
     if data.get("type", None) == "ROUTE_CHANGE":
         request.state.lifetime.current_page = data["data"]["currentPath"]
         log.info(f"Route Changed: {request.state.lifetime.current_page}")
-        return fh.Response(None, status_code=200, headers={"hx-trigger": "toggle-mage"})
+        spells = True
 
     spells = await request.state.lifetime.spellbook.lookup_spells(request)
     log.info(f"Spells: {spells}")
 
-    # Send an update to the frontend to glow the Mage.
-    # component = update_classes(MageAsHelper(hx_swap_oob="true"), "mage-glow", method="ADD" if spells else "REMOVE")
-    # await request.state.lifetime.message_queue.put(("mage", fh.to_xml(component)))
-
-    return fh.Response(None)
+    return fh.Response(None, status_code=200, headers={"hx-trigger": "has-available-spell"} if spells else None)
 
 
 # @app.get("/process-event")
