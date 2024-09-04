@@ -119,5 +119,3 @@ AuthenticationForm = fh.Form(
 
 
 Mage = fh.Img(src="/static/icons/mage.svg", id="mage")
-
-

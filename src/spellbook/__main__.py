@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from typing import AsyncIterator, Callable, TypedDict
+from typing import Any, AsyncIterator, Callable, TypedDict
 import asyncio
 import contextlib
 import logging
 import os
 
 from fasthtml import common as fh  # type: ignore
+from starlette.middleware import Middleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 import httpx
 import uvicorn
 
 from spellbook import _utils, components, const, thoughtspot
 from spellbook.components import AuthenticationForm, thoughtspot_sdk
+from spellbook.components.shadcn import shadcn
+from spellbook.components.toaster import Toaster
 from spellbook.components.utils import update_classes
 from spellbook.spellbook import Spellbook
 
@@ -22,52 +26,80 @@ log = logging.getLogger(__name__)
 class AppLifespanState(TypedDict):
     """Global namespace for the app."""
     lifetime: _utils.State
+    toast: Toaster
 
 
-MageAsHelper = update_classes(
-    fh.Div(
-        components.Mage(
-            hx_trigger="has-available-spell from:body",
-            hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
-        ),
-        hx_trigger="click", hx_get="/read-spells", hx_target="#active_spellbook", hx_swap="outerHTML",
+MageAsHelper = fh.Div(
+    components.Mage(
+        hx_trigger="has-available-spell from:body",
+        hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
+        cls="w-12 opacity-70 absolute -bottom-5 -right-5",
     ),
-    "w-12", "opacity-70", "absolute", "-bottom-5", "-right-5",
-    method="ADD",
+    # So, this works.. but it requires you to have the dialog on the page already? (So we can swap it).
+    hx_trigger="click", hx_get="/read-spells", hx_target="#active_spellbook", hx_swap="outerHTML",
 )
 
 
-def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | None]:
+def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | Any]:
     """Check if the user is authorized to access the page."""
-    async def wrapper(request: Request, *args, **kwargs):
+    async def wrapper(request: Request):
         if "DEV" in os.environ:
             from dotenv import load_dotenv
 
             load_dotenv()
-            await do_authorization(request, url=os.environ["HOST"], user=os.environ["USER"], secret=os.environ["PASS"])
-            is_user_authorized = True
 
+            try:
+                site = os.environ["HOST"]
+                user = os.environ["USER"]
+                hush = os.environ["PASS"]
+                await do_authorization(request, url=site, user=user, secret=hush)
+            except KeyError as e:
+                log.error(f"Environment variable not found: {e}")
+                is_user_authorized = False
+            except httpx.HTTPStatusError:
+                is_user_authorized = False
+            else:
+                is_user_authorized = True
         else:
             is_user_authorized = getattr(request.state.lifetime, "api_session", False)
 
         if not is_user_authorized:
             return fh.RedirectResponse("/login", status_code=303)
 
-        log.info(f"{request=}, {args=}, {kwargs=}")
-        # return await fn(request, *args, **kwargs)
         return await fn(request)
     return wrapper
 
 
-async def do_authorization(request: Request, url: str, user: str, secret: str) -> None:
+async def do_authorization(request: Request, *, url: str, user: str, secret: str) -> None:
     """Perform the authorization check."""
     api = thoughtspot.ThoughtSpotAPIClient(base_url=url, username=user, secret_key=secret)
     r = await api.login()
-    r.raise_for_status()
+
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        log.warning(
+            f"Authentication for {user=} with {secret=} failed."
+            f"\nTS API Response: HTTP {r.status_code}\n{r.text}"
+        )
+        request.state.toast.error(request, message=f"Authentication for {user=} with {secret=} failed.")
+        raise
 
     request.state.lifetime.api_session = api
     request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
     request.state.lifetime.current_page = "/"
+
+    async def background_toaster():
+        import datetime as dt
+
+        NOW = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(days=1)
+
+        async for r in api.collect_security_logs(since=NOW):
+            for d in r.json():
+                # log.info(d)
+                pass
+
+    # request.state.lifetime.security_logger = asyncio.create_task(background_toaster())
 
 
 @contextlib.asynccontextmanager
@@ -76,18 +108,21 @@ async def lifespan(app: fh.FastHTML) -> AsyncIterator[AppLifespanState]:
     lifetime = _utils.State()
     lifetime.spellbook = Spellbook()
 
-    yield {"lifetime": lifetime}
+    yield {
+        "lifetime": lifetime,
+        "toast": Toaster.__setup_fh__(app=app),
+    }
 
     # TEARDOWN
 
 
 app = fh.FastHTML(
-    htmlkw={"data-theme": "spellbook"},
+    # htmlkw={"data-theme": "spellbook"},
     hdrs=(
-        fh.Script(src=const.HTMX_SSE),
+        # fh.Script(src=const.HTMX_SSE),
         fh.Script(src=const.THOUGHTSPOT_SDK),
-        fh.Script(src=const.TAILWIND_CSS),
-        fh.Link(href=const.DAISY_CSS, rel="stylesheet", type="text/css"),
+        shadcn.ShadHead(tw_link=True),
+        fh.Link(href="/static/minified.css", rel="stylesheet", type="text/css"),
         fh.Link(href="/static/style.css", rel="stylesheet", type="text/css"),
     ),
     lifespan=lifespan,
@@ -110,8 +145,8 @@ async def static_files(filename: str, ext: str) -> fh.FileResponse:
 @check_authorization
 async def _(request: Request):
     """Homepage."""
-    host = str(request.state.lifetime.api_session.base_url)
-    init = thoughtspot_sdk.Init(thoughtspot_host=host, authentication="passthru")
+    lifetime = request.state.lifetime
+    init = thoughtspot_sdk.Init(thoughtspot_host=str(lifetime.api_session.base_url), authentication="passthru")
     full = thoughtspot_sdk.FullAppEmbed(div_id="embed-container")
 
     page = fh.Body(
@@ -120,10 +155,20 @@ async def _(request: Request):
             MageAsHelper,
             id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
         ),
-        fh.Dialog(id="active_spellbook", cls="modal"),
+        shadcn.Dialog(id="active_spellbook", standard=True),
     )
 
+    request.state.toast.warning(request, message=f"5 new Security Events!")
     return fh.Title("Spellbook"), init, page
+
+
+@app.post("/toaster")
+async def _(request: Request):
+    """Test the Toaster."""
+    log.info(f"<< {request=}")
+    request.state.toast.warning(request, message=f"5 new Security Events!")
+    return fh.Response(None, status_code=200)
+
 
 
 @app.post("/is-spellbook-enabled-for")
@@ -145,18 +190,25 @@ async def _(request: Request) -> None:
 @app.get("/read-spells")
 async def _(request: Request):
     """Check whether or not any Spells are available."""
-    modal = fh.Dialog(
-        fh.Div(
-            fh.H3("Hello!", cls="text-lg font-bold"),
-            fh.P("Press ESC key or click outside to close", cls="py-4"),
-            cls="modal-box"
-        ),
-        fh.Form(fh.Button("close"), method="dialog", cls="modal-backdrop"),
-        fh.Script("document.getElementById('active_spellbook').showModal();"),
-        id="active_spellbook", cls="modal",
+    # Gather our spells..
+    import random
+    children = [fh.Div(fh.H3("Hello, world!")) for _ in range(random.randint(1, 10))]
+    # ../
+
+    request.state.toast.warning(request, message="Hello, world!")
+
+    component = shadcn.Dialog(
+        *children,
+        title="Active Spells",
+        description="Click on a spell to learn more about it.",
+        state="open",
+        id="active_spellbook", 
     )
 
-    return modal
+    # Overide the component's style so we can ensure it's shown.
+    component.style = "display: flex;"
+
+    return component
 
 
 @app.get("/login")
