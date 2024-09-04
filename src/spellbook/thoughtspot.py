@@ -55,6 +55,13 @@ class ThoughtSpotAPIClient(httpx.AsyncClient):
             self.headers["Authorization"] = f"Bearer {r.json()['token']}"
 
         return r
+    
+    async def search_users(self, **options) -> httpx.Response:
+        """
+        READ:
+        """
+        r = await self.post("api/rest/2.0/users/search", json=options)
+        return r
 
     async def collect_security_logs(
         self,
