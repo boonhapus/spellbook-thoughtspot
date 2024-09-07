@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import pathlib
 
 from fasthtml import common as fh  # type: ignore
 from starlette.middleware import Middleware
@@ -13,7 +14,7 @@ from starlette.responses import JSONResponse, Response
 import httpx
 import uvicorn
 
-from spellbook import _utils, components, const, thoughtspot
+from spellbook import _utils, components, const, thoughtspot, types
 from spellbook.components import AuthenticationForm, thoughtspot_sdk
 from spellbook.components.shadcn import shadcn
 from spellbook.components.toaster import Toaster
@@ -126,6 +127,7 @@ app = fh.FastHTML(
         fh.Link(href="/static/style.css", rel="stylesheet", type="text/css"),
     ),
     lifespan=lifespan,
+    # secret_key=os.environ.get("SECRET_KEY", "default-secret-key"),
 )
 
 
@@ -134,16 +136,16 @@ async def _() -> fh.FileResponse:
     return fh.FileResponse(const.DIR_STATIC.joinpath("favicon.ico").as_posix())
 
 
-@app.get("/static/{filename:path}.{ext:static}")
-async def static_files(filename: str, ext: str) -> fh.FileResponse:
-    fp = const.DIR_STATIC.joinpath(f"{filename}.{ext}")
-    log.debug(f"File '/static/{filename}.{ext}' was requested, exists={fp.exists()}")
+@app.get("/static/{file}")
+async def static_files(file: pathlib.Path) -> fh.FileResponse:
+    fp = const.DIR_STATIC.joinpath(file)
+    log.debug(f"File '/static/{file}' was requested, exists={fp.exists()}")
     return fh.FileResponse(fp.as_posix())
 
 
 @app.get("/")
 @check_authorization
-async def _(request: Request):
+async def _(request: Request) -> types.PageRenderableFull:
     """Homepage."""
     lifetime = request.state.lifetime
     init = thoughtspot_sdk.Init(thoughtspot_host=str(lifetime.api_session.base_url), authentication="passthru")
@@ -161,6 +163,9 @@ async def _(request: Request):
     request.state.toast.warning(request, message=f"5 new Security Events!")
     return fh.Title("Spellbook"), init, page
 
+#
+#
+#
 
 @app.post("/toaster")
 async def _(request: Request):
@@ -172,7 +177,7 @@ async def _(request: Request):
 
 
 @app.post("/is-spellbook-enabled-for")
-async def _(request: Request) -> None:
+async def _(request: Request) -> fh.HttpHeader:
     """Check whether or not any Spells are available."""
     lifetime = request.state.lifetime
     data = await request.json()
@@ -184,7 +189,8 @@ async def _(request: Request) -> None:
     lifetime.active_spells = spells = await request.state.lifetime.spellbook.lookup_spells(request)
     log.info(f"Spells: {spells}")
 
-    return fh.Response(None, status_code=200, headers={"hx-trigger": "has-available-spell"} if spells else None)
+    return fh.HttpHeader("hx-trigger", "has-available-spell") if spells else fh.HttpHeader()
+    # return fh.Response(None, status_code=200, headers={"hx-trigger": "has-available-spell"} if spells else None)
 
 
 @app.get("/read-spells")
@@ -211,6 +217,22 @@ async def _(request: Request):
     return component
 
 
+@app.post("/auth")
+async def _(request: Request):
+    """Authenticate the User to ThoughtSpot."""
+    data = await request.form()
+
+    try:
+        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])  # type: ignore[arg-type]
+    
+    except httpx.HTTPStatusError as e:
+        log.error(f"Auth failed: {e}")
+        return AuthenticationForm
+
+    else:
+        return fh.Response(None, headers={"hx-redirect": "/"})
+
+
 @app.get("/login")
 async def _(request: Request):
     """Login page."""
@@ -228,22 +250,6 @@ async def _(request: Request):
     )
     
     return fh.Title("Spellbook"), page
-
-
-@app.post("/auth")
-async def _(request: Request):
-    """Authenticate the User to ThoughtSpot."""
-    data = await request.form()
-
-    try:
-        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])  # type: ignore[arg-type]
-    
-    except httpx.HTTPStatusError as e:
-        log.error(f"Auth failed: {e}")
-        return AuthenticationForm
-
-    else:
-        return fh.Response(None, headers={"hx-redirect": "/"})
 
 
 if __name__ == "__main__":
