@@ -83,39 +83,4 @@ from spellbook.components import utils
 #  5. Add it to /static/icons.
 #
 
-AuthenticationForm = fh.Form(
-    fh.Label(
-        fh.Img(src="/static/icons/link.svg", cls="w-6"),
-        fh.Input(
-            name="host", type="url", required=True,
-            placeholder="https://customer.thoughtspot.cloud",
-            cls="grow",
-        ),
-        cls="input input-bordered flex items-center gap-4"
-    ),
-    fh.Label(
-        fh.Img(src="/static/icons/user.svg", cls="w-6"),
-        fh.Input(
-            name="user", type="text", required=True,
-            placeholder="tsadmin", minlength=1,
-            cls="grow",
-        ),
-        cls="input input-bordered flex items-center gap-4"
-    ),
-    fh.Label(
-        fh.Img(src="/static/icons/key.svg", cls="w-6"),
-        fh.Input(
-            name="pass", type="text", required=True,
-            placeholder="secret key", pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-            cls="grow",
-        ),
-        enctype="multipart/form-data",
-        cls="input input-bordered flex items-center gap-4"
-    ),
-    fh.Button("Login", cls="btn btn-primary"),
-    hx_post="/auth",
-    cls="flex flex-col gap-4 w-full max-w-md",
-)
-
-
 Mage = fh.Img(src="/static/icons/mage.svg", id="mage")

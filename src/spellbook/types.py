@@ -4,7 +4,7 @@ from typing import TypeAlias
 
 from fasthtml import common as fh
 
-PageRenderableFull = tuple[fh.Title, *tuple[fh.Header | fh.Script, ...], fh.Body]
+PageRenderableFull = tuple[fh.Title, fh.Body]
 # DOCS: https://docs.fastht.ml/ref/handlers.html
 """
 Handler functions can return multiple FT objects as a tuple. The first item is

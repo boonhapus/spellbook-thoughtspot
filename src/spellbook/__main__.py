@@ -1,24 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Callable, TypedDict
-import asyncio
+from typing import AsyncIterator, TypedDict
 import contextlib
 import logging
 import os
 import pathlib
 
 from fasthtml import common as fh  # type: ignore
-from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-import httpx
 import uvicorn
 
-from spellbook import _utils, components, const, thoughtspot, types
-from spellbook.components import AuthenticationForm, thoughtspot_sdk
+from spellbook import _utils, auth, components, const, types
+from spellbook.components import thoughtspot_sdk
 from spellbook.components.shadcn import shadcn
 from spellbook.components.toaster import Toaster
-from spellbook.components.utils import update_classes
+from spellbook.routes import login
 from spellbook.spellbook import Spellbook
 
 log = logging.getLogger(__name__)
@@ -39,68 +35,6 @@ MageAsHelper = fh.Div(
     # So, this works.. but it requires you to have the dialog on the page already? (So we can swap it).
     hx_trigger="click", hx_get="/read-spells", hx_target="#active_spellbook", hx_swap="outerHTML",
 )
-
-
-def check_authorization(fn) -> Callable[[...], fh.RedirectResponse | Any]:
-    """Check if the user is authorized to access the page."""
-    async def wrapper(request: Request):
-        if "DEV" in os.environ:
-            from dotenv import load_dotenv
-
-            load_dotenv()
-
-            try:
-                site = os.environ["HOST"]
-                user = os.environ["USER"]
-                hush = os.environ["PASS"]
-                await do_authorization(request, url=site, user=user, secret=hush)
-            except KeyError as e:
-                log.error(f"Environment variable not found: {e}")
-                is_user_authorized = False
-            except httpx.HTTPStatusError:
-                is_user_authorized = False
-            else:
-                is_user_authorized = True
-        else:
-            is_user_authorized = getattr(request.state.lifetime, "api_session", False)
-
-        if not is_user_authorized:
-            return fh.RedirectResponse("/login", status_code=303)
-
-        return await fn(request)
-    return wrapper
-
-
-async def do_authorization(request: Request, *, url: str, user: str, secret: str) -> None:
-    """Perform the authorization check."""
-    api = thoughtspot.ThoughtSpotAPIClient(base_url=url, username=user, secret_key=secret)
-    r = await api.login()
-
-    try:
-        r.raise_for_status()
-    except httpx.HTTPStatusError:
-        log.warning(
-            f"Authentication for {user=} with {secret=} failed."
-            f"\nTS API Response: HTTP {r.status_code}\n{r.text}"
-        )
-        request.state.toast.error(request, message=f"Authentication for {user=} with {secret=} failed.")
-        raise
-
-    request.state.lifetime.api_session = api
-    request.state.lifetime.api_keep_alive = asyncio.create_task(api.is_active_check())
-    request.state.lifetime.current_page = "/"
-
-    async def background_toaster():
-        import datetime as dt
-
-        NOW = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(days=1)
-
-        async for r in api.collect_security_logs(since=NOW):
-            for d in r.json():
-                # log.info(d)
-                pass
-
-    # request.state.lifetime.security_logger = asyncio.create_task(background_toaster())
 
 
 @contextlib.asynccontextmanager
@@ -128,6 +62,9 @@ app = fh.FastHTML(
     ),
     lifespan=lifespan,
     # secret_key=os.environ.get("SECRET_KEY", "default-secret-key"),
+    routes=[
+        *login.routes,
+    ],
 )
 
 
@@ -136,15 +73,15 @@ async def _() -> fh.FileResponse:
     return fh.FileResponse(const.DIR_STATIC.joinpath("favicon.ico").as_posix())
 
 
-@app.get("/static/{file}")
+@app.get("/static/{file:path}")
 async def static_files(file: pathlib.Path) -> fh.FileResponse:
     fp = const.DIR_STATIC.joinpath(file)
-    log.debug(f"File '/static/{file}' was requested, exists={fp.exists()}")
+    log.info(f"File '/static/{file}' was requested, exists={fp.exists()}")
     return fh.FileResponse(fp.as_posix())
 
 
 @app.get("/")
-@check_authorization
+@auth.is_authorized
 async def _(request: Request) -> types.PageRenderableFull:
     """Homepage."""
     lifetime = request.state.lifetime
@@ -160,20 +97,16 @@ async def _(request: Request) -> types.PageRenderableFull:
         shadcn.Dialog(id="active_spellbook", standard=True),
     )
 
-    request.state.toast.warning(request, message=f"5 new Security Events!")
+    request.state.toast.warning(request, message="5 new Security Events!")
     return fh.Title("Spellbook"), init, page
 
-#
-#
-#
 
 @app.post("/toaster")
 async def _(request: Request):
     """Test the Toaster."""
     log.info(f"<< {request=}")
-    request.state.toast.warning(request, message=f"5 new Security Events!")
+    request.state.toast.warning(request, message="5 new Security Events!")
     return fh.Response(None, status_code=200)
-
 
 
 @app.post("/is-spellbook-enabled-for")
@@ -215,41 +148,6 @@ async def _(request: Request):
     component.style = "display: flex;"
 
     return component
-
-
-@app.post("/auth")
-async def _(request: Request):
-    """Authenticate the User to ThoughtSpot."""
-    data = await request.form()
-
-    try:
-        await do_authorization(request, url=data["host"], user=data["user"], secret=data["pass"])  # type: ignore[arg-type]
-    
-    except httpx.HTTPStatusError as e:
-        log.error(f"Auth failed: {e}")
-        return AuthenticationForm
-
-    else:
-        return fh.Response(None, headers={"hx-redirect": "/"})
-
-
-@app.get("/login")
-async def _(request: Request):
-    """Login page."""
-    if getattr(request.state.lifetime, "api_session", False):
-        return fh.RedirectResponse("/", status_code=303)
-
-    page = fh.Body(
-        fh.Div(
-            update_classes(components.Mage, "w-24", method="ADD"),
-            fh.H1("ThoughtSpot Spellbook", cls="text-2xl text-primary"),
-            AuthenticationForm,
-            cls="h-screen flex flex-col gap-4 items-center justify-center",
-        ),
-        id="container",
-    )
-    
-    return fh.Title("Spellbook"), page
 
 
 if __name__ == "__main__":
