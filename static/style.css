@@ -37,6 +37,51 @@
   *
   */
 
+[data-theme="spellbook"] {
+    /* --background: 351 100% 95%;
+    --foreground: 351 5% 0%;
+    --card: 351 50% 90%;
+    --card-foreground: 351 5% 10%;
+    --popover: 351 100% 95%;
+    --popover-foreground: 351 100% 0%; */
+    --primary: 	0.77	0.91%	0.50%;
+    /* --primary-foreground: 0 0% 100%;
+    --secondary: 351 30% 70%;
+    --secondary-foreground: 0 0% 0%;
+    --muted: 313 30% 85%;
+    --muted-foreground: 351 5% 35%;
+    --accent: 313 30% 80%;
+    --accent-foreground: 351 5% 10%;
+    --destructive: 0 100% 30%;
+    --destructive-foreground: 351 5% 90%;
+    --border: 351 30% 50%;
+    --input: 351 30% 18%;
+    --ring: 351 60.5% 46.7%; */
+}
+/* .dark {
+    --background: 351 50% 5%;
+    --foreground: 351 5% 90%;
+    --card: 351 50% 0%;
+    --card-foreground: 351 5% 90%;
+    --popover: 351 50% 5%;
+    --popover-foreground: 351 5% 90%;
+    --primary: 351 60.5% 46.7%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 351 30% 10%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 313 30% 15%;
+    --muted-foreground: 351 5% 60%;
+    --accent: 313 30% 15%;
+    --accent-foreground: 351 5% 90%;
+    --destructive: 0 100% 30%;
+    --destructive-foreground: 351 5% 90%;
+    --border: 351 30% 18%;
+    --input: 351 30% 18%;
+    --ring: 351 60.5% 46.7%;
+} */
+  
+
+
 @keyframes pulse-glow {
     0% { filter: drop-shadow(0 0 12px oklch(var(--a))) drop-shadow(0 0 14px oklch(var(--a))); }
     50% { filter: drop-shadow(0 0 16px oklch(var(--a))) drop-shadow(0 0 20px oklch(var(--a))); }

@@ -11,6 +11,7 @@ from spellbook import auth, components, types
 
 log = logging.getLogger(__name__)
 
+
 AuthenticationForm = fh.Form(
     fh.Label(
         fh.Img(src="/static/icons/link.svg", cls="w-6"),

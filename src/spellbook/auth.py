@@ -16,12 +16,8 @@ log = logging.getLogger(__name__)
 
 def is_authorized(fn) -> Callable[[...], fh.RedirectResponse | Any]:
     """Check if the user is authorized to access the page."""
-    async def wrapper(request: Request):
+    async def wrapper(app: fh.FastHTML, request: Request):
         if "DEV" in os.environ:
-            from dotenv import load_dotenv
-
-            load_dotenv()
-
             try:
                 site = os.environ["HOST"]
                 user = os.environ["USER"]
@@ -40,7 +36,7 @@ def is_authorized(fn) -> Callable[[...], fh.RedirectResponse | Any]:
         if not is_user_authorized:
             return fh.RedirectResponse("/login", status_code=303)
 
-        return await fn(request)
+        return await fn(app=app, request=request)
     return wrapper
 
 

@@ -2,69 +2,47 @@ from __future__ import annotations
 
 from typing import AsyncIterator, TypedDict
 import contextlib
+import datetime as dt
 import logging
 import os
 import pathlib
 
-from fasthtml import common as fh  # type: ignore
+from fasthtml import common as fh
 from starlette.requests import Request
-import uvicorn
 
-from spellbook import _utils, auth, components, const, types
+from spellbook import _utils, auth, const
 from spellbook.components import thoughtspot_sdk
-from spellbook.components.shadcn import shadcn
-from spellbook.components.toaster import Toaster
-from spellbook.routes import login
 from spellbook.spellbook import Spellbook
 
 log = logging.getLogger(__name__)
 
-
-class AppLifespanState(TypedDict):
-    """Global namespace for the app."""
-    lifetime: _utils.State
-    toast: Toaster
-
-
-MageAsHelper = fh.Div(
-    components.Mage(
-        hx_trigger="has-available-spell from:body",
-        hx_on__trigger="htmx.toggleClass(htmx.find('#mage'), 'mage-glow');",
-        cls="w-12 opacity-70 absolute -bottom-5 -right-5",
-    ),
-    # So, this works.. but it requires you to have the dialog on the page already? (So we can swap it).
-    hx_trigger="click", hx_get="/read-spells", hx_target="#active_spellbook", hx_swap="outerHTML",
-)
+FRANKEN_UI_CSS = fh.Link(rel="stylesheet", href="https://unpkg.com/franken-wc@0.1.0/dist/css/zinc.min.css")
+TAILWIND   = fh.Script(defer=True, src="https://cdn.tailwindcss.com")
 
 
 @contextlib.asynccontextmanager
-async def lifespan(app: fh.FastHTML) -> AsyncIterator[AppLifespanState]:
+async def lifespan(app: fh.FastHTML) -> AsyncIterator[TypedDict]:
     # STARTUP
     lifetime = _utils.State()
     lifetime.spellbook = Spellbook()
 
     yield {
         "lifetime": lifetime,
-        "toast": Toaster.__setup_fh__(app=app),
+        # "toast": Toaster.__setup_fh__(app=app),
     }
 
     # TEARDOWN
 
 
 app = fh.FastHTML(
-    # htmlkw={"data-theme": "spellbook"},
+    htmlkw={"data-theme": "spellbook"},
     hdrs=(
-        # fh.Script(src=const.HTMX_SSE),
+        FRANKEN_UI_CSS, TAILWIND,
         fh.Script(src=const.THOUGHTSPOT_SDK),
-        shadcn.ShadHead(tw_link=True),
-        fh.Link(href="/static/minified.css", rel="stylesheet", type="text/css"),
         fh.Link(href="/static/style.css", rel="stylesheet", type="text/css"),
     ),
     lifespan=lifespan,
-    # secret_key=os.environ.get("SECRET_KEY", "default-secret-key"),
-    routes=[
-        *login.routes,
-    ],
+    secret_key=os.environ.get("SECRET_KEY", "default-secret-key"),
 )
 
 
@@ -76,41 +54,90 @@ async def _() -> fh.FileResponse:
 @app.get("/static/{file:path}")
 async def static_files(file: pathlib.Path) -> fh.FileResponse:
     fp = const.DIR_STATIC.joinpath(file)
-    log.info(f"File '/static/{file}' was requested, exists={fp.exists()}")
+
+    if not fp.exists():
+        log.warning(f"File '/static/{file}' was requested, but does not exist!")
+
     return fh.FileResponse(fp.as_posix())
 
 
 @app.get("/")
 @auth.is_authorized
-async def _(request: Request) -> types.PageRenderableFull:
+async def _(app: fh.FastHTML, request: Request):
     """Homepage."""
-    lifetime = request.state.lifetime
-    init = thoughtspot_sdk.Init(thoughtspot_host=str(lifetime.api_session.base_url), authentication="passthru")
+    mage_icon = fh.Img(src="https://api.dicebear.com/9.x/adventurer-neutral/svg?seed=Annie")
+    mage_name = "Mage Johnson"
+    last_swap = dt.datetime.now(tz=dt.timezone.utc).strftime("%H:%M:%S")
+
+    # lifetime = request.state.lifetime
+
+    init = thoughtspot_sdk.Init(thoughtspot_host=os.environ["HOST"], authentication="passthru")
     full = thoughtspot_sdk.FullAppEmbed(div_id="embed-container")
 
     page = fh.Body(
         fh.Div(
-            full,
-            MageAsHelper,
-            id="embed-container", cls="h-[90vh] ml-16 mt-16 mr-16 relative skeleton",
+
+            # ThoughtSpot iFrame Component
+            fh.Div(full, id="embed-container", cls="h-[80vh] w-[80vw] uk-background-muted"),
+
+            # Admin Comment
+            fh.Div(
+                fh.Article(
+                    fh.Header(
+                        fh.Div(
+                            fh.Div(mage_icon, cls="uk-comment-avatar uk-margin-small-right"),
+                            fh.Div(
+                                fh.Div(mage_name, cls="uk-comment-title"),
+                                fh.P(f"updated at {last_swap}", id="active-spells-last-update", cls="uk-comment-meta"),
+                                cls="uk-flex-1"
+                            ),
+                            cls="uk-flex uk-flex-middle",
+                        ),
+                        cls="uk-comment-header",
+                    ),
+                    fh.Div(
+                        fh.P(
+                            "There are no spells available to cast!",
+                            id="active-spells-amount",
+                            hx_trigger="check-active-spells from:body",
+                            hx_get="/update-spells-indicator",
+                        ),
+                        cls="uk-comment-body"
+                    ),
+                    cls="uk-comment uk-comment-primary uk-margin-small-top uk-width-1-5 uk-margin-auto-left",
+                    tabindex="-1", role="comment",
+                ),
+            ),
+
+            cls="uk-container uk-position-center",
         ),
-        shadcn.Dialog(id="active_spellbook", standard=True),
     )
 
-    request.state.toast.warning(request, message="5 new Security Events!")
     return fh.Title("Spellbook"), init, page
 
 
-@app.post("/toaster")
+@app.get("/update-spells-indicator")
 async def _(request: Request):
-    """Test the Toaster."""
-    log.info(f"<< {request=}")
-    request.state.toast.warning(request, message="5 new Security Events!")
-    return fh.Response(None, status_code=200)
+    last_swap = dt.datetime.now(tz=dt.timezone.utc).strftime("%H:%M:%S")
+
+    indicator = fh.P(
+        f"There are {len(request.state.lifetime.active_spells) or 'no'} spells available to cast!",
+        id="active-spells-amount",
+        hx_trigger="check-active-spells from:body",
+        hx_on__trigger="/active-spells",
+    )
+
+    last_update = fh.P(
+        f"updated at {last_swap}",
+        id="active-spells-last-update", cls="uk-comment-meta",
+        hx_swap_oob="#active-spells-last-update",
+    )
+
+    return indicator, last_update
 
 
 @app.post("/is-spellbook-enabled-for")
-async def _(request: Request) -> fh.HttpHeader:
+async def _(request: Request):
     """Check whether or not any Spells are available."""
     lifetime = request.state.lifetime
     data = await request.json()
@@ -122,37 +149,23 @@ async def _(request: Request) -> fh.HttpHeader:
     lifetime.active_spells = spells = await request.state.lifetime.spellbook.lookup_spells(request)
     log.info(f"Spells: {spells}")
 
-    return fh.HttpHeader("hx-trigger", "has-available-spell") if spells else fh.HttpHeader()
-    # return fh.Response(None, status_code=200, headers={"hx-trigger": "has-available-spell"} if spells else None)
+    tags = [
+        fh.HttpHeader("hx-trigger", "check-active-spells"),
+    ]
 
+    if spells:
+        tags.append(fh.HttpHeader("hx-trigger", "has-available-spell"))
 
-@app.get("/read-spells")
-async def _(request: Request):
-    """Check whether or not any Spells are available."""
-    # Gather our spells..
-    import random
-    children = [fh.Div(fh.H3("Hello, world!")) for _ in range(random.randint(1, 10))]
-    # ../
-
-    request.state.toast.warning(request, message="Hello, world!")
-
-    component = shadcn.Dialog(
-        *children,
-        title="Active Spells",
-        description="Click on a spell to learn more about it.",
-        state="open",
-        id="active_spellbook", 
-    )
-
-    # Overide the component's style so we can ensure it's shown.
-    component.style = "display: flex;"
-
-    return component
+    return tags
 
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    import uvicorn
+
     from spellbook import _logging
 
+    load_dotenv()
     os.environ["DEV"] = "true"
 
     uvicorn.run("spellbook.__main__:app", port=5002, reload=True, log_config=_logging.CONFIG)
